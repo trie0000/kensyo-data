@@ -1,0 +1,67 @@
+# 配信が更新されているかの定期チェック。
+#
+# 更新は平日に走る。止まっても利用側は期限切れを自分で隠すので表示は壊れないが、
+# **止まったこと自体は誰も教えてくれない**。このジョブが失敗すると
+# GitHub からリポジトリ所有者にメールが届く。
+#
+# 閾値が4日なのは週末があるため。金曜の更新からは月曜の朝で既に3日経つので、
+# 3にすると毎週月曜に誤警告が出て、本当に止まったときに信用されなくなる。
+# （アプリ側 STALE_DAYS と同じ理由・同じ値）
+#
+# 注意: 公開リポジトリのスケジュール実行は、**60日間コミットが無いと
+# GitHub 側で自動停止する**。2か月以上更新が止まると監視自体も止まる。
+
+name: 配信の鮮度
+
+on:
+  schedule:
+    # 毎日 02:00 UTC = 11:00 JST。収集の08:00から3時間の余裕を取る
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 最終更新からの経過日数を見る
+        run: |
+          set -euo pipefail
+          FILE=campaigns-8f3a2b1c94d7.json
+          MAX_AGE=4
+
+          gen=$(jq -er .generated_at "$FILE")
+          # 小数秒とタイムゾーン表記を落として UTC として読む。
+          # publish.py は "2026-08-15T00:51:30.733215+00:00" 形式で書くので、
+          # そのままだと date に渡す形として不安定になる
+          gen_s=$(date -u -d "$(printf '%s' "$gen" | cut -c1-19)Z" +%s)
+          age=$(( ( $(date -u +%s) - gen_s ) / 86400 ))
+
+          # JST の今日。締切の比較は日付文字列同士で足りる
+          today=$(date -u -d '+9 hours' +%F)
+          total=$(jq -r '.campaigns | length' "$FILE")
+          live=$(jq -r --arg d "$today" \
+            '[.campaigns[] | select(.ends_at[0:10] >= $d)] | length' "$FILE")
+
+          echo "最終更新 : ${gen}（${age}日前）"
+          echo "配信件数 : ${total}件"
+          echo "応募可能 : ${live}件（JST ${today} 時点）"
+          echo "許容     : ${MAX_AGE}日"
+
+          if [ "$age" -gt "$MAX_AGE" ]; then
+            echo "::error::配信が ${age} 日止まっています。収集側の Mac を確認してください"
+            exit 1
+          fi
+
+          # 配信は生きているのに中身が痩せている場合。止まってはいないが
+          # 収集か抽出のどこかが壊れている可能性がある
+          if [ "$live" -lt 30 ]; then
+            echo "::error::応募できる懸賞が ${live} 件しかありません。収集か抽出を確認してください"
+            exit 1
+          fi
+
+          echo "正常です"
