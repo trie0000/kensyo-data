@@ -26,7 +26,8 @@ jobs:
   freshness:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # v4 は Node.js 20 依存で非推奨の警告が出る。放置する監視なので v5 にしておく
+      - uses: actions/checkout@v5
 
       - name: 最終更新からの経過日数を見る
         run: |
